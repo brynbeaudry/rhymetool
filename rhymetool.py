@@ -16,13 +16,34 @@ import threading
 import copy
 
 
-import nltk
-nltk.download('cmudict')
+try:
+    f = open('./maps/cmu.json', 'r')
+except:
+    print("Lol.")
+    pass
+else:
+    entries_dict = json.load(f)
+    f.close()
+    # Global
+    entries = [(k,v) for k,v in entries_dict.items()] 
+    print('Entries loaded.')
 
 
-nltk.corpus.cmudict.ensure_loaded()
-entries = nltk.corpus.cmudict.entries()
-cust_entries = [(word , syl) for word, syl in nltk.corpus.cmudict.entries()]
+def tup2dict(tup, di):
+    for a, b in tup:
+        di.setdefault(a, []).append(b)
+    return di
+
+def init_cmu(args):
+    import nltk
+    nltk.download('cmudict')
+    nltk.corpus.cmudict.ensure_loaded()
+    entries = nltk.corpus.cmudict.entries()
+    cum_dict = dict()
+    tup2dict(entries, cum_dict)
+    with open('./maps/cmu.json', 'w') as convert_file:
+        convert_file.write(json.dumps(cum_dict))
+    print('Finished file mapping')
 
 
 def rhyme(inp, level):
@@ -80,16 +101,17 @@ def init(l):
     lock = l
 
 def make_map_mt(line, level):
-        global cust_entries
         try:
             lock.acquire()
             last_word = line.strip().split(' ')[-1].strip()
             line = line.strip()
             #import pdb;pdb.set_trace();
             #print(entries)
-            syllable_arr = [syl for word, syl in cust_entries if word == last_word]
+            syllable_arr = [syl for word, syl in entries if word == last_word]
             lock.release()
-            if not syllable_arr:
+            if not syllable_arr or not len(syllable_arr[0]) >= level:
+                # The second condition was added since the workflow is to map higher level 
+                # Rhymes first, to group more similar rhymes closer together.
                 return (None, None)
             else:
                 #print(syllable_arr)
@@ -362,8 +384,6 @@ def merge_map(args):
     with open(args.out, 'w') as output:
         output.write(json.dumps(merged_map))
     print('Done!')
-
-
 
 def cli():
     # Todo, you ccould pick a certain number of a key before moving on, and then delete those lines from the list in that key, and
@@ -641,6 +661,12 @@ def cli():
     )
 
     dump_map_parser.set_defaults(func=dump_map)
+
+    init_cmu_parser = subparsers.add_parser(
+        "init_cmu", help="calls the init_cmu function"
+    )
+
+    init_cmu_parser.set_defaults(func=init_cmu)
 
 
     args = parser.parse_args()
