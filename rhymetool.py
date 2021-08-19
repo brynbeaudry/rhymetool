@@ -10,11 +10,20 @@ import random
 import re
 from timeit import default_timer as timer
 from datetime import timedelta
+from multiprocessing.dummy import Pool as ThreadPool
+import  multiprocessing
+import threading
+import copy
+
 
 import nltk
 nltk.download('cmudict')
 
+
+nltk.corpus.cmudict.ensure_loaded()
 entries = nltk.corpus.cmudict.entries()
+cust_entries = [(word , syl) for word, syl in nltk.corpus.cmudict.entries()]
+
 
 def rhyme(inp, level):
      syllables = [(word, syl) for word, syl in entries if word == inp]
@@ -65,37 +74,67 @@ def isContainSameWord(word1, word2):
         return True
     if word2.find(word1) == len(word2) - len(word1): 
         return True
+    
+def init(l):
+    global lock
+    lock = l
 
+def make_map_mt(line, level):
+        global cust_entries
+        try:
+            lock.acquire()
+            last_word = line.strip().split(' ')[-1].strip()
+            line = line.strip()
+            #import pdb;pdb.set_trace();
+            #print(entries)
+            syllable_arr = [syl for word, syl in cust_entries if word == last_word]
+            lock.release()
+            if not syllable_arr:
+                return (None, None)
+            else:
+                #print(syllable_arr)
+                rhyming_syls = [ x for x in syllable_arr[0][-level:]]
+                # Take the reverse
+                rhyming_syls_rev = rhyming_syls[::-1]
+                rhyme_key = '_'.join(rhyming_syls_rev)
+                #rhyme_map.setdefault(yme_key, []).append(line.strip())
+                return (rhyme_key, line)
+        except IndexError:
+            pass
+        except TypeError as e:
+            print(line, syllable_arr, last_word)
+            import pdb;pdb.set_trace();
+            pass
+        except AssertionError as e:
+            print(line, syllable_arr, last_word)
+            import pdb;pdb.set_trace();
+            pass
+        except Exception as e:
+            print(f'Line: {line}\nLast Word {last_word}\\n')
+            raise
 
 def make_map(args):
     # Produces a rhyme map from a list of lines
     # Probably a good idea to edit list down to lines that make sense, and that you actually might use.
     # Based on the level provided
-    rhyme_map = dict()
     filename = args.input
     level = args.level
     map_file = args.out
     file = open(filename,'r')
     text_lines = file.readlines()
-    for idx, line in enumerate(text_lines):
-        if args.debug:
-            print(idx)
-            if idx > 900:
-                import pdb; pdb.set_trace();
-        last_word = line.strip().split(' ')[-1]
-        try:
-            syllable_arr = [ syllables for word, syllables in entries if word == last_word][0]
-            rhyming_syls = [ x for x in syllable_arr[-level:]]
-            # Take the reverse
-            rhyming_syls_rev = rhyming_syls[::-1]
-            rhyme_key = '_'.join(rhyming_syls_rev)
-            rhyme_map.setdefault(rhyme_key, []).append(line.strip())
-        except IndexError:
-            continue
-        except:
-            print(f'Line: {line}\nLast Word {last_word}\nSyllables used:{rhyme_key}\n')
-            raise
     file.close()
+    text_lines = [(line, level) for line in text_lines]
+    l = multiprocessing.Lock()
+    pool = multiprocessing.Pool(initializer=init, initargs=(l,))
+    results = pool.starmap(make_map_mt, text_lines)
+    pool.close()
+    pool.join()
+
+    #print(results)
+    rhyme_map = dict()
+    for k, v in results:
+        if v is not None:
+            rhyme_map.setdefault(k, []).append(v)
 
     with open(map_file, 'w') as convert_file:
         convert_file.write(json.dumps(rhyme_map))

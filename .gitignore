@@ -1,6 +1,7 @@
 # 
 maps/
-./*.txt
+input/
+test.sh
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
