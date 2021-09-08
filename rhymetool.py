@@ -14,19 +14,44 @@ from multiprocessing.dummy import Pool as ThreadPool
 import  multiprocessing
 import threading
 import copy
+import pickle
+
+# global
+json_entries = None
+cmu_entries = None
 
 
-try:
-    f = open('./maps/cmu.json', 'r')
-except:
-    print("Lol.")
-    pass
-else:
-    entries_dict = json.load(f)
-    f.close()
-    # Global
-    entries = [(k,v) for k,v in entries_dict.items()] 
-    print('Entries loaded.')
+def require_rhyme_dict():
+    global json_entries
+    if json_entries:
+        return
+    try:
+        jsonf = open('./maps/cmu.json', 'r')
+    except:
+        print("Lol.")
+        pass
+    else:
+        # Global
+        json_entries = dict(json.load(jsonf))
+        jsonf.close()
+        print('json_entries loaded.')
+
+
+def require_cmu():
+    global cmu_entries
+    if cmu_entries:
+        return
+    try:
+        picklef = open('./maps/cmu.pickle', 'rb')
+    except:
+        print("Lol.")
+        pass
+    else:
+        # Global
+        cmu_entries = pickle.load(picklef)
+        picklef.close()
+        print('orig cmu entries loaded.')
+
 
 
 def tup2dict(tup, di):
@@ -38,38 +63,89 @@ def init_cmu(args):
     import nltk
     nltk.download('cmudict')
     nltk.corpus.cmudict.ensure_loaded()
-    entries = nltk.corpus.cmudict.entries()
+    cmu_entries = nltk.corpus.cmudict.entries()
+    with open('./maps/cmu.pickle', 'wb') as f:
+        pickle.dump(cmu_entries, f)
+    print('Finished writing cmu tuple to pickle')
     cum_dict = dict()
-    tup2dict(entries, cum_dict)
+    tup2dict(cmu_entries, cum_dict)
     with open('./maps/cmu.json', 'w') as convert_file:
         convert_file.write(json.dumps(cum_dict))
-    print('Finished file mapping')
+    print('Finished writing cmu dict to json')
 
 
-def rhyme(inp, level):
+def isRhyme(word1, word2, level):
+    require_rhyme_dict()
+    # Could be alot faster than using the traditional way
+    global json_entries
+    if isContainSameWord(word1, word2):
+        return False
+    word1_syllable_arrs = json_entries.get(word1)
+    word2_syllables_arrs = json_entries.get(word2)
+    if not word1_syllable_arrs or not word2_syllables_arrs:
+        return False
+    for a in word1_syllable_arrs:
+        for b in word2_syllables_arrs:
+            if a[-level:] == b[-level:]:
+                return True
+    return False
+
+def rhyme_orig(inp, level):
+    require_cmu()
+    require_rhyme_dict()
+    global cmu_entries
+    global json_entries
+    '''
      syllables = [(word, syl) for word, syl in entries if word == inp]
      rhymes = []
      for (word, syllable) in syllables:
-             rhymes += [word for word, pron in entries if pron[-level:] == syllable[-level:]]
-     return set(rhymes)
+        rhymes += [word for word, pron in entries if pron[-level:] == syllable[-level:]]
+    '''
+    syllables = [(inp, v) for v in json_entries.get(inp)] if json_entries.get(inp) else []
+    rhymes = []
+    for (word, syllable) in syllables:
+        rhymes += [word for word, pron in cmu_entries if pron[-level:] == syllable[-level:]]
+    return set(rhymes)
 
-def isNearRhyme(key1, word2, level=2):
+def isNearRhymeWithKey(key1, word2, level=2):
+    require_rhyme_dict()
+    global json_entries
     # write a function for use only with your maps
     # you can determine 
     # key will be the backward pronounciation
     # so if you take the reverse of the key, and split it, you can check all the levels based on some criteria.
     word1_syllables_rev = key1.split('_')
-    word2_syllables = [syl for word, syl in entries if word == word][0]
-    matches = len([x for x in word1_syllables_rev if x in word2_syllables])
-    return matches >= level
+    word2_syllables = json_entries.get(word2)
+    for pron in word2_syllables:
+        matches = [x for x in word1_syllables_rev if x in pron]
+        if len(matches) >= level:
+            return True
+    return False
+
+def isNearRhyme(word1, word2, level=2):
+    require_rhyme_dict()
+    # Could be alot faster than using the traditional way
+    global json_entries
+    if isContainSameWord(word1, word2):
+        return False
+    word1_syllable_arrs = json_entries.get(word1)
+    word2_syllables_arrs = json_entries.get(word2)
+    for a in word1_syllable_arrs:
+        for b in word2_syllables_arrs:
+            matches = [x for x in a if x in b]
+            if len(matches) >= level:
+                return True
+    return False
 
 def isRhymeSequentialWithKey(key1, word2, level=2):
+    require_rhyme_dict()
+    global json_entries
     # Given the key that the word is from,
     # here the level is how many syllables have to match from left to right
     #start = timer()
     matches = 0
     word1_syllables_rev = key1.split('_')
-    word2_syllables = [syl for word, syl in entries if word == word2][0]
+    word2_syllables = json_entries.get(word2)[0]
     word2_syllables_rev = [x for x in word2_syllables[::-1]]
     min_length = min(len(word1_syllables_rev), len(word2_syllables_rev))
     for i in range(0,min_length):
@@ -82,60 +158,33 @@ def isRhymeSequentialWithKey(key1, word2, level=2):
 def doTheyRhyme(word1, word2, level=1):
     # first, we don't want to report 'glue' and 'unglue' as rhyming words
     # those kind of rhymes are LAME
-    if word1.find(word2) == len(word1) - len(word2):
-        return False
-    if word2.find(word1) == len(word2) - len(word1): 
-        return False
-    return word1 in rhyme(word2, level)
+    if not isContainSameWord(word1, word2):
+        return isRhyme(word1, word2, level)
+    return False
+
+def doTheyRhyme_orig(word1, word2, level=1):
+    # first, we don't want to report 'glue' and 'unglue' as rhyming words
+    # those kind of rhymes are LAME
+    if not isContainSameWord(word1, word2):
+        return word1 in rhyme_orig(word2, level)
+    return False
 
 def isContainSameWord(word1, word2):
     # first, we don't want to report 'glue' and 'unglue' as rhyming words
     # those kind of rhymes are LAME
-    if word1.find(word2) == len(word1) - len(word2):
+    if word1 in word2 or word2 in word1:
         return True
-    if word2.find(word1) == len(word2) - len(word1): 
-        return True
+    else:
+        return False
     
 def init(l):
     global lock
     lock = l
 
-def make_map_mt(line, level):
-        try:
-            lock.acquire()
-            last_word = line.strip().split(' ')[-1].strip()
-            line = line.strip()
-            #import pdb;pdb.set_trace();
-            #print(entries)
-            syllable_arr = [syl for word, syl in entries if word == last_word]
-            lock.release()
-            if not syllable_arr or not len(syllable_arr[0]) >= level:
-                # The second condition was added since the workflow is to map higher level 
-                # Rhymes first, to group more similar rhymes closer together.
-                return (None, None)
-            else:
-                #print(syllable_arr)
-                rhyming_syls = [ x for x in syllable_arr[0][-level:]]
-                # Take the reverse
-                rhyming_syls_rev = rhyming_syls[::-1]
-                rhyme_key = '_'.join(rhyming_syls_rev)
-                #rhyme_map.setdefault(yme_key, []).append(line.strip())
-                return (rhyme_key, line)
-        except IndexError:
-            pass
-        except TypeError as e:
-            print(line, syllable_arr, last_word)
-            import pdb;pdb.set_trace();
-            pass
-        except AssertionError as e:
-            print(line, syllable_arr, last_word)
-            import pdb;pdb.set_trace();
-            pass
-        except Exception as e:
-            print(f'Line: {line}\nLast Word {last_word}\\n')
-            raise
 
 def make_map(args):
+    require_rhyme_dict()
+    global json_entries
     # Produces a rhyme map from a list of lines
     # Probably a good idea to edit list down to lines that make sense, and that you actually might use.
     # Based on the level provided
@@ -145,27 +194,33 @@ def make_map(args):
     file = open(filename,'r')
     text_lines = file.readlines()
     file.close()
-    text_lines = [(line, level) for line in text_lines]
-    l = multiprocessing.Lock()
-    pool = multiprocessing.Pool(initializer=init, initargs=(l,))
-    results = pool.starmap(make_map_mt, text_lines)
-    pool.close()
-    pool.join()
-
-    #print(results)
     rhyme_map = dict()
-    for k, v in results:
-        if v is not None:
-            rhyme_map.setdefault(k, []).append(v)
+
+    # Make a list of tuples reversed phonetic key values, with lines as values.
+    for line in text_lines:
+        last_word = line.strip().split(' ')[-1].strip()
+        line = line.strip()
+        syllable_arrays = json_entries.get(last_word)
+        if not syllable_arrays:
+            continue
+        for syllable_array in syllable_arrays:
+            if not len(syllable_array) >= level:
+                continue
+            else:
+                rhyming_syls = [ x for x in syllable_array[-level:]]
+                rhyming_syls_rev = rhyming_syls[::-1]
+                rhyme_key = '_'.join(rhyming_syls_rev)
+                rhyme_map.setdefault(rhyme_key, []).append(line)
 
     with open(map_file, 'w') as convert_file:
         convert_file.write(json.dumps(rhyme_map))
     print('Finished file mapping')
 
-def dump_map(args):
+def dump_map_var(args):
     # Dump a map which has its rhymes in order.
+    # Has variance through shuffling and disallowing repeated rhymes.
     is_shuffle = args.shuffle
-    reduced_level = args.reduced_level
+    reduced_level = args.reduced_level or args.level - 1
     minimum_words = args.min_words
     with open(args.input, 'r') as f:
         sorted_rhyme_map = json.load(f)
@@ -188,8 +243,7 @@ def dump_map(args):
                     continue
                 elif this_word in used_words:
                     continue
-                elif (isRhymeSequentialWithKey(key, previous_word, args.level) or \
-                    ( reduced_level and isRhymeSequentialWithKey(key, previous_word, reduced_level) ) ):
+                elif (doTheyRhyme(this_word, previous_word, args.level)):
                     print(' . ', end=' ')
                     if previous_word not in used_words:
                         print(' . ', end=' ')
@@ -205,9 +259,7 @@ def dump_map(args):
                 if len(used_words) \
                     and is_enough_words \
                     and this_word not in used_words \
-                    and len(used_words) \
-                    and (doTheyRhyme(this_word, used_words[-1], args.level) or \
-                    ( reduced_level and doTheyRhyme(this_word, used_words[-1], reduced_level) ) ):
+                    and len(used_words):
                     results.append(line)
                     used_words.append(this_word)
                     if args.debug:
@@ -223,6 +275,58 @@ def dump_map(args):
     output.close()
     sys.stdout.flush()
 
+def dump_map(args):
+    with open(args.input, 'r') as f:
+        sorted_rhyme_map = json.load(f)
+    output = open(args.out, args.mode)
+    for k,v in sorted_rhyme_map.items():
+        random.shuffle(v)
+        for line in v:
+            output.write(f'{line}\n')
+    output.close()
+    print('Unfiltered map printed')
+
+def clean_list(args):
+    require_rhyme_dict()
+    global json_entries
+    level = args.level
+    input_lines = []
+    output_lines = []
+    used_words = []
+    with open(args.input, 'r') as f:
+        input_lines = f.read().splitlines()
+    print('Loaded file, cleaning lines...')
+    last_idx = len(input_lines) - 1
+    for idx, line in enumerate(input_lines):
+        this_word = line.split(' ')[-1].strip()
+        if this_word in used_words:
+            continue
+        if idx == 0:
+            next_word = input_lines[idx + 1].split(' ')[-1].strip()
+            if doTheyRhyme(this_word, next_word, level):
+                print(f'Rhymed {this_word}!')
+                output_lines.append(line)
+                used_words.append(this_word)
+        elif idx > 0 and idx < last_idx:
+            next_word = input_lines[idx + 1].split(' ')[-1].strip()
+            prev_word = input_lines[idx - 1].split(' ')[-1].strip()
+            if doTheyRhyme(this_word, next_word, level) or doTheyRhyme(this_word, prev_word, level):
+                print(f'Rhymed {this_word}!')
+                output_lines.append(line)
+                used_words.append(this_word)
+            else:
+                print(f'X L{level} {prev_word} {json_entries.get(prev_word)} and {this_word} {json_entries.get(this_word)}')
+                print(f'X L{level} {this_word} {json_entries.get(this_word)} and {next_word} {json_entries.get(next_word)}')
+        elif idx == last_idx:
+            prev_word = input_lines[idx - 1].split(' ')[-1].strip()
+            if doTheyRhyme(this_word, prev_word, level):
+                output_lines.append(line)
+                used_words.append(this_word)
+    output = open(args.out, args.mode)
+    for l in output_lines:
+        output.write(f'{l}\n')
+    output.close()
+    print('Cleaned list')
 
 def sort_file(args):
     reduced_level = args.reduced_level
@@ -593,20 +697,82 @@ def cli():
 
     sort_file_parser.set_defaults(func=sort_file)
 
-    dump_map_parser = subparsers.add_parser(
-        "dump-map", help="calls the dump map function"
+    dump_map_var_parser = subparsers.add_parser(
+        "dump_map_var", help="calls the dump map var function, which dumps the map with variation"
     )
 
-    dump_map_parser.add_argument(
+    dump_map_var_parser.add_argument(
         "--level",
         default=1,
         type=int,
         help="Increase the level to increase the criteria for how good the rhyme should be. If one, the last syl pronounce needs to match, if two, the last two need to match",
     )
 
-    dump_map_parser.add_argument(
+    dump_map_var_parser.add_argument(
         "--input",
         default=f'list_in.txt',
+        type=str,
+        help="The output file for resulting map",
+    )
+
+    dump_map_var_parser.add_argument(
+        "--out",
+        default=f'list_out.txt',
+        type=str,
+        help="The output file for resulting map",
+    )
+
+    dump_map_var_parser.add_argument(
+        "--reduced-level",
+        default=0,
+        type=int,
+        help="The reduced level to check if a rhyme can't be found for the original level",
+    )
+
+    dump_map_var_parser.add_argument(
+        "--max-tries",
+        default=4,
+        type=int,
+        help="The max tries to get a rhyme from that particular pronounciation",
+    )
+
+    dump_map_var_parser.add_argument(
+        "--mode",
+        default='w',
+        type=str,
+        help="Write mode, defaults to w, but could be 'a'. Don't make it r",
+    )
+
+    dump_map_var_parser.add_argument(
+        "--shuffle",
+        default=0,
+        type=int,
+        help="Whether or not to randomize the order of lists of each dictionary item",
+    )
+
+    dump_map_var_parser.add_argument(
+        "--min-words",
+        default=4,
+        type=int,
+        help="Minimum words a line needs to have to be printed",
+    )
+
+    dump_map_var_parser.add_argument(
+        "--debug",
+        default=0,
+        type=int,
+        help="debug val",
+    )
+
+    dump_map_var_parser.set_defaults(func=dump_map_var)
+
+    dump_map_parser = subparsers.add_parser(
+        "dump_map", help="calls the dump map function, which dumps the map without variation"
+    )
+
+    dump_map_parser.add_argument(
+        "--input",
+        default=f'map_in.txt',
         type=str,
         help="The output file for resulting map",
     )
@@ -619,48 +785,47 @@ def cli():
     )
 
     dump_map_parser.add_argument(
-        "--reduced-level",
-        default=0,
-        type=int,
-        help="The reduced level to check if a rhyme can't be found for the original level",
-    )
-
-    dump_map_parser.add_argument(
-        "--max-tries",
-        default=4,
-        type=int,
-        help="The max tries to get a rhyme from that particular pronounciation",
-    )
-
-    dump_map_parser.add_argument(
         "--mode",
         default='w',
         type=str,
         help="Write mode, defaults to w, but could be 'a'. Don't make it r",
     )
 
-    dump_map_parser.add_argument(
-        "--shuffle",
-        default=0,
-        type=int,
-        help="Whether or not to randomize the order of lists of each dictionary item",
-    )
-
-    dump_map_parser.add_argument(
-        "--min-words",
-        default=4,
-        type=int,
-        help="Minimum words a line needs to have to be printed",
-    )
-
-    dump_map_parser.add_argument(
-        "--debug",
-        default=0,
-        type=int,
-        help="debug val",
-    )
-
     dump_map_parser.set_defaults(func=dump_map)
+
+    clean_list_parser = subparsers.add_parser(
+        "clean_list", help="calls the dump map function, which dumps the map without variation"
+    )
+
+    clean_list_parser.add_argument(
+        "--input",
+        default=f'list_in.txt',
+        type=str,
+        help="The input list",
+    )
+
+    clean_list_parser.add_argument(
+        "--out",
+        default=f'list_out.txt',
+        type=str,
+        help="The output file",
+    )
+
+    clean_list_parser.add_argument(
+        "--mode",
+        default='w',
+        type=str,
+        help="Write mode, defaults to w, but could be 'a'. Don't make it r",
+    )
+
+    clean_list_parser.add_argument(
+        "--level",
+        default=1,
+        type=int,
+        help="In this case, this is the minimum level that will allow a rhyme to remain in the list. Increase the level to increase the criteria for how good the rhyme should be. If one, the last syl pronounce needs to match, if two, the last two need to match",
+    )
+
+    clean_list_parser.set_defaults(func=clean_list)
 
     init_cmu_parser = subparsers.add_parser(
         "init_cmu", help="calls the init_cmu function"
